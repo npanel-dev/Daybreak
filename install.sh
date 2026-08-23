@@ -63,6 +63,9 @@ API_HOST=""; SERVER_ID=""; SECRET_KEY=""; SECRET_KEY_FILE=""
 CLAIM_PORT="443"; BIND_IP="0.0.0.0"
 TLS_CERT=""; TLS_KEY=""; ACME_EMAIL=""
 REPORT_ONLINE="false"; ENFORCE_DEVICE_LIMIT="false"
+# 是否**显式传了**这两个开关。缺省值与「显式传了 false」要能区分：
+# 升级路径保留既有配置，只有显式传了才去改它。
+REPORT_ONLINE_SET="false"; ENFORCE_DEVICE_LIMIT_SET="false"
 TARBALL=""; VERSION=""; DOWNLOAD_BASE=""
 SKIP_SERVICE="false"; DO_UNINSTALL="false"
 
@@ -80,8 +83,8 @@ while [[ $# -gt 0 ]]; do
         --tls-cert)              TLS_CERT="${2:-}"; shift 2 ;;
         --tls-key)               TLS_KEY="${2:-}"; shift 2 ;;
         --acme-email)            ACME_EMAIL="${2:-}"; shift 2 ;;
-        --report-online)         REPORT_ONLINE="true"; shift ;;
-        --enforce-device-limit)  ENFORCE_DEVICE_LIMIT="true"; shift ;;
+        --report-online)         REPORT_ONLINE="true"; REPORT_ONLINE_SET="true"; shift ;;
+        --enforce-device-limit)  ENFORCE_DEVICE_LIMIT="true"; ENFORCE_DEVICE_LIMIT_SET="true"; shift ;;
         --tarball)               TARBALL="${2:-}"; shift 2 ;;
         --version)               VERSION="${2:-}"; shift 2 ;;
         --download-base)         DOWNLOAD_BASE="${2:-}"; shift 2 ;;
@@ -360,6 +363,24 @@ step "生成配置"
 if [[ -f "${CONFIG_FILE}" ]]; then
     info "配置已存在，保留不动：${CONFIG_FILE}"
     info "（这是升级路径：只换二进制。要重新配置请先备份并删除它）"
+    # **例外：显式传了开关就改它。**
+    #
+    # 「保留不动」对整份配置成立，但如果 `--report-online` 在重跑时静默无效，
+    # 运维会以为开了、面板上却仍然没有在线数——而两边都不报错。
+    # 要么让它生效，要么明说它不生效；静默是最差的那个选项。
+    toggle_in_config() {
+        local key="$1" value="$2"
+        if grep -qE "^ *${key} *=" "${CONFIG_FILE}"; then
+            sed -i "s/^ *${key} *=.*/${key} = ${value}/" "${CONFIG_FILE}"
+        else
+            printf '%s = %s\n' "${key}" "${value}" >> "${CONFIG_FILE}"
+        fi
+        info "已更新 ${key} = ${value}"
+    }
+    [[ "${REPORT_ONLINE_SET}" == "true" ]] \
+        && toggle_in_config report_online "${REPORT_ONLINE}"
+    [[ "${ENFORCE_DEVICE_LIMIT_SET}" == "true" ]] \
+        && toggle_in_config enforce_device_limit "${ENFORCE_DEVICE_LIMIT}"
 else
     # **先写临时文件，成功了才落位。** 直接写目标文件的话，中途失败会留下
     # 半份配置——而下次重跑看到「配置已存在」直接跳过生成，节点从此起不来
@@ -460,7 +481,17 @@ cat <<EOF
 面板上改了画像（端口/安全层/carrier）节点会自己发现并重建监听，不用人工介入。
 EOF
 
-if [[ "${REPORT_ONLINE}" != "true" ]]; then
+# **按配置文件里的实际值判断，不是按命令行标志。**
+#
+# 升级路径（重跑不带参数）会保留已有配置，那时标志一定是缺省的 false，
+# 而配置里可能早就开着。照标志报的话，输出会说「未开启」——运维照着去开，
+# 发现本来就是开的。「说的和实际不一致」比不说更糟。
+EFFECTIVE_REPORT_ONLINE="${REPORT_ONLINE}"
+if [[ -f "${CONFIG_FILE}" ]]; then
+    EFFECTIVE_REPORT_ONLINE="$(sed -n 's/^ *report_online *= *//p' "${CONFIG_FILE}" \
+                               | tr -d ' ' | head -1)"
+fi
+if [[ "${EFFECTIVE_REPORT_ONLINE}" != "true" ]]; then
     cat <<EOF
 
 ${yellow}在线上报未开启（缺省关）。${plain}

@@ -1,0 +1,5 @@
+# 本仓库只放脚本与文档。二进制走 Releases，不进版本库。
+*.tar.gz
+*.sha256
+dbk-node
+.DS_Store

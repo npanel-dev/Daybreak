@@ -214,20 +214,24 @@ if [[ -n "${TARBALL}" ]]; then
     fi
 else
     if [[ -z "${DOWNLOAD_BASE}" ]]; then
-        if [[ -z "${VERSION}" ]]; then
-            info "查询最新版本…"
-            VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-                       | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//')" || true
-            [[ -n "${VERSION}" ]] || fail "取不到最新版本号。
-仓库可能是私有的、或还没有 Release。两条出路：
-  1. 自建分发：bash install.sh --download-base https://你的域名/dbk ...
-  2. 本地包：  bash install.sh --tarball ./${PKG_NAME} ..."
+        if [[ -n "${VERSION}" ]]; then
+            # 指定了版本：走该版本的固定资产路径。
+            DOWNLOAD_BASE="https://github.com/${REPO}/releases/download/${VERSION}"
+        else
+            # 默认取最新：用 GitHub 的 latest/download 直链，**不经 api.github.com**。
+            # 那个 JSON 接口（releases/latest）匿名有 60 次/时 的速率限制，某些服务器
+            # （共享出口 IP、或此前调用过）一撞 403 就取不到版本号，卡在「获取安装包」。
+            # 直链是 302 重定向到最新 Release 的资产，无速率限制、无需 token。
+            DOWNLOAD_BASE="https://github.com/${REPO}/releases/latest/download"
         fi
-        DOWNLOAD_BASE="https://github.com/${REPO}/releases/download/${VERSION}"
     fi
     info "下载 ${DOWNLOAD_BASE}/${PKG_NAME}"
     curl -fsSL "${DOWNLOAD_BASE}/${PKG_NAME}" -o "${WORK_DIR}/node.tar.gz" \
-        || fail "下载失败：${DOWNLOAD_BASE}/${PKG_NAME}"
+        || fail "下载失败：${DOWNLOAD_BASE}/${PKG_NAME}
+仓库可能是私有的、还没有 Release、或网络不通。三条出路：
+  1. 指定版本：bash install.sh --version v1.0.2 ...
+  2. 自建分发：bash install.sh --download-base https://你的域名/dbk ...
+  3. 本地包：  bash install.sh --tarball ./${PKG_NAME} ..."
     # **校验必须做**：下载路径上任何一环出问题都会得到一个能解压但跑不起来的
     # 包，而症状是 systemd 反复重启，与配置写错不可区分。
     if curl -fsSL "${DOWNLOAD_BASE}/${PKG_NAME}.sha256" -o "${WORK_DIR}/node.sha256" 2>/dev/null; then

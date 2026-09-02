@@ -23,7 +23,8 @@
 #   --tls-cert PATH         TLS 模式的证书链（面板下发 tls 时需要）
 #   --tls-key PATH          TLS 模式的私钥
 #   --acme-email MAIL       没有证书时用它自动签发（HTTP-01，需要 80 端口空闲）
-#   --report-online         上报在线用户（面板据此数设备；缺省关）
+#   --report-online         上报在线用户（面板据此数设备；**缺省开**）
+#   --no-report-online      关闭在线上报（不把客户端 IP 发给面板）
 #   --enforce-device-limit  执行面板下发的设备数上限（缺省关）
 #   --tarball PATH          用本地包装，不下载
 #   --version TAG           指定版本（缺省取最新 Release）
@@ -62,7 +63,7 @@ step() { printf '\n%s══ %s ══%s\n'   "${cyan}"   "$*" "${plain}"; }
 API_HOST=""; SERVER_ID=""; SECRET_KEY=""; SECRET_KEY_FILE=""
 CLAIM_PORT="443"; BIND_IP="0.0.0.0"
 TLS_CERT=""; TLS_KEY=""; ACME_EMAIL=""
-REPORT_ONLINE="false"; ENFORCE_DEVICE_LIMIT="false"
+REPORT_ONLINE="true"; ENFORCE_DEVICE_LIMIT="false"
 # 是否**显式传了**这两个开关。缺省值与「显式传了 false」要能区分：
 # 升级路径保留既有配置，只有显式传了才去改它。
 REPORT_ONLINE_SET="false"; ENFORCE_DEVICE_LIMIT_SET="false"
@@ -83,7 +84,8 @@ while [[ $# -gt 0 ]]; do
         --tls-cert)              TLS_CERT="${2:-}"; shift 2 ;;
         --tls-key)               TLS_KEY="${2:-}"; shift 2 ;;
         --acme-email)            ACME_EMAIL="${2:-}"; shift 2 ;;
-        --report-online)         REPORT_ONLINE="true"; REPORT_ONLINE_SET="true"; shift ;;
+        --report-online)         REPORT_ONLINE="true";  REPORT_ONLINE_SET="true"; shift ;;
+        --no-report-online)      REPORT_ONLINE="false"; REPORT_ONLINE_SET="true"; shift ;;
         --enforce-device-limit)  ENFORCE_DEVICE_LIMIT="true"; ENFORCE_DEVICE_LIMIT_SET="true"; shift ;;
         --tarball)               TARBALL="${2:-}"; shift 2 ;;
         --version)               VERSION="${2:-}"; shift 2 ;;
@@ -488,11 +490,10 @@ step "生成配置"
 if [[ -f "${CONFIG_FILE}" ]]; then
     info "配置已存在，保留不动：${CONFIG_FILE}"
     info "（这是升级路径：只换二进制。要重新配置请先备份并删除它）"
-    # **例外：显式传了开关就改它。**
+    # **例外：这两个开关升级时也会写。**
     #
-    # 「保留不动」对整份配置成立，但如果 `--report-online` 在重跑时静默无效，
-    # 运维会以为开了、面板上却仍然没有在线数——而两边都不报错。
-    # 要么让它生效，要么明说它不生效；静默是最差的那个选项。
+    # 「保留不动」对整份配置成立，但如果开关在重跑时静默无效，运维会以为改了、
+    # 面板上却没反应——而两边都不报错。要么让它生效，要么明说；静默最糟。
     toggle_in_config() {
         local key="$1" value="$2"
         if grep -qE "^ *${key} *=" "${CONFIG_FILE}"; then
@@ -502,8 +503,11 @@ if [[ -f "${CONFIG_FILE}" ]]; then
         fi
         info "已更新 ${key} = ${value}"
     }
-    [[ "${REPORT_ONLINE_SET}" == "true" ]] \
-        && toggle_in_config report_online "${REPORT_ONLINE}"
+    # **在线上报默认开启**：升级时无条件把 report_online 同步到本次生效值
+    # （缺省 true，只有 --no-report-online 才是 false）。这样旧的「默认关」节点
+    # 升级即自动开启，运维不必记得加参数；要保持关闭就每次带 --no-report-online。
+    toggle_in_config report_online "${REPORT_ONLINE}"
+    # 设备数限制仍只在显式传参时才改——它会拒连接，默认开风险更高。
     [[ "${ENFORCE_DEVICE_LIMIT_SET}" == "true" ]] \
         && toggle_in_config enforce_device_limit "${ENFORCE_DEVICE_LIMIT}"
 else
@@ -608,22 +612,27 @@ EOF
 
 # **按配置文件里的实际值判断，不是按命令行标志。**
 #
-# 升级路径（重跑不带参数）会保留已有配置，那时标志一定是缺省的 false，
-# 而配置里可能早就开着。照标志报的话，输出会说「未开启」——运维照着去开，
-# 发现本来就是开的。「说的和实际不一致」比不说更糟。
+# 以**配置里的实际值**为准报（升级时上面已把它同步好），不照命令行标志报——
+# 「说的和实际不一致」比不说更糟。
 EFFECTIVE_REPORT_ONLINE="${REPORT_ONLINE}"
 if [[ -f "${CONFIG_FILE}" ]]; then
     EFFECTIVE_REPORT_ONLINE="$(sed -n 's/^ *report_online *= *//p' "${CONFIG_FILE}" \
                                | tr -d ' ' | head -1)"
 fi
-if [[ "${EFFECTIVE_REPORT_ONLINE}" != "true" ]]; then
+if [[ "${EFFECTIVE_REPORT_ONLINE}" == "true" ]]; then
     cat <<EOF
 
-${yellow}在线上报未开启（缺省关）。${plain}
+${green}在线上报已开启（缺省开）。${plain}
+节点会把客户端 IP 发给面板——面板靠 IP 去重来数设备与在线数。
+不需要就重跑本脚本加 --no-report-online 关闭。
+EOF
+else
+    cat <<EOF
+
+${yellow}在线上报已关闭（--no-report-online）。${plain}
 面板 UI 的在线数会是空的，设备数限制也不会生效。
-要开启：重跑本脚本加 --report-online，或在 ${CONFIG_FILE} 的 [control] 段
+要开启：重跑本脚本（缺省即开），或在 ${CONFIG_FILE} 的 [control] 段
 设 report_online = true 后 systemctl reload dbk-node。
-开启意味着节点会把客户端 IP 发给面板——面板靠 IP 去重来数设备。
 EOF
 fi
 

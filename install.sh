@@ -202,7 +202,21 @@ trap 'rm -rf "${WORK_DIR}"; [[ -n "${CONFIG_TMP}" ]] && rm -f "${CONFIG_TMP}"' E
 PKG_NAME="dbk-node-${ARCH_TRIPLE}.tar.gz"
 # 装之前记下现有版本：升级时要能一眼看出「从哪个换到哪个」。
 # 只报「已启动」而不报版本的话，「脚本跑了但其实没换成新的」看不出来。
-INSTALLED_VERSION="$(sed -n 's/^commit=//p' "${CONFIG_DIR}/VERSION" 2>/dev/null | cut -c1-7)"
+#
+# **必须先判文件在不在。** 首次安装时 VERSION 不存在，而本脚本开着
+# `set -euo pipefail`：`sed` 对不存在的文件返回 2 → pipefail 把整条管道
+# 判为失败 → set -e 让脚本**当场退出**，退出码正是 sed 的 2。
+#
+# `2>/dev/null` 挡得住错误输出，挡不住退出码 —— 于是首次安装表现为
+# 「跑完什么都没发生」：连下一行的「下载 …」都打不出来，而 EXIT trap
+# 已经把临时目录清掉了，现场一点线索都不留。实测栽在这里。
+#
+# **升级路径不受影响**（文件已存在，sed 返回 0），所以在装过的机器上
+# 永远复现不出来 —— 这正是它能活到线上的原因。
+INSTALLED_VERSION=""
+if [[ -f "${CONFIG_DIR}/VERSION" ]]; then
+    INSTALLED_VERSION="$(sed -n 's/^commit=//p' "${CONFIG_DIR}/VERSION" | cut -c1-7)"
+fi
 if [[ -n "${TARBALL}" ]]; then
     [[ -f "${TARBALL}" ]] || fail "找不到本地包：${TARBALL}"
     info "使用本地包：${TARBALL}"
@@ -265,7 +279,15 @@ if ! id -u "${RUN_USER}" >/dev/null 2>&1; then
 fi
 install -d -m 0750 -o root -g "${RUN_USER}" "${CONFIG_DIR}"
 [[ -f "${PKG_DIR}/VERSION" ]] && install -m 0644 "${PKG_DIR}/VERSION" "${CONFIG_DIR}/VERSION"
-NEW_VERSION="$(sed -n 's/^commit=//p' "${PKG_DIR}/VERSION" 2>/dev/null | cut -c1-7)"
+# 同上一处的道理：包里没带 VERSION 时（旧包、或打包漏了），
+# `sed` 的非零退出会经 pipefail + set -e 把脚本掀掉，而这里已经装完
+# 二进制、建完用户 —— 半装状态比装不上更难查。上一行的
+# `[[ -f ]] && install` 是 && 列表，不受 set -e 影响；这一行是命令替换，
+# 受影响。两者形似而危险性不同
+NEW_VERSION=""
+if [[ -f "${PKG_DIR}/VERSION" ]]; then
+    NEW_VERSION="$(sed -n 's/^commit=//p' "${PKG_DIR}/VERSION" | cut -c1-7)"
+fi
 if [[ -n "${INSTALLED_VERSION}" && "${INSTALLED_VERSION}" != "${NEW_VERSION}" ]]; then
     info "已安装 ${BIN_DIR}/dbk-node（${INSTALLED_VERSION} → ${NEW_VERSION}）"
 elif [[ -n "${INSTALLED_VERSION}" ]]; then

@@ -395,6 +395,10 @@ if [[ -n "${TLS_CERT}" ]]; then
     # 所以：先尝试装 acl；装不上就退回 chgrp + 0640（把私钥归到运行用户
     # 所属组）。两条路都失败才报错 —— **不能再静默**。
     if [[ "${TLS_CERT}" == /etc/letsencrypt/* ]]; then
+        # **父目录也要能进**：新版 certbot 把 /etc/letsencrypt 连同 live、
+        # archive 一起设成 0700。只放开后两个的话，路径第一级就被挡住 ——
+        # 用 `namei -l <私钥路径>` 能一眼看出卡在哪一级
+        chmod 0755 /etc/letsencrypt 2>/dev/null || true
         chmod 0755 /etc/letsencrypt/live /etc/letsencrypt/archive 2>/dev/null || true
 
         if ! command -v setfacl >/dev/null 2>&1; then
@@ -441,6 +445,41 @@ control process exited with error code，看不出是权限）。手动授权后
   setfacl -R -m u:${RUN_USER}:rX /etc/letsencrypt/live /etc/letsencrypt/archive"
         fi
         info "已授权 ${RUN_USER} 读取证书与私钥"
+
+        # ── 续期钩子 ──
+        #
+        # **这一步必须自动做，不能只在收尾里提示一句。**
+        #
+        # certbot 续期时会**新建** privkey（`root:root 0600`），我们刚设的
+        # ACL 不会跟着走。也就是说：装完一切正常，约 60 天后证书一续，
+        # 节点突然读不到私钥而起不来 —— 症状与首次那次一模一样，
+        # 而那时没人会想到是两个月前的证书续期干的。
+        #
+        # 早先这里只在收尾打印「可以挂进 deploy-hook」，且给的钩子内容是
+        # 光秃秃一句 `systemctl reload dbk-node` —— **那治不了这个问题**：
+        # 重载读的还是那个读不到的新私钥。钩子里必须先重新授权。
+        hook_dir="/etc/letsencrypt/renewal-hooks/deploy"
+        hook_file="${hook_dir}/10-dbk-node.sh"
+        mkdir -p "${hook_dir}"
+        # 用单引号 heredoc 防止此刻展开，只把 RUN_USER 手动插进去
+        cat > "${hook_file}" <<HOOK
+#!/bin/sh
+# 由 Daybreak install.sh 自动写入，certbot 每次续期成功后执行。
+#
+# 续期会新建 privkey（root:root 0600），ACL 不会跟着走 —— 不重设的话
+# 节点读不到新私钥，表现为「跑了两个月突然起不来」，而 systemd 只报
+# 一句 control process exited with error code。
+if command -v setfacl >/dev/null 2>&1; then
+    setfacl -R -m u:${RUN_USER}:rX /etc/letsencrypt/live /etc/letsencrypt/archive
+else
+    chgrp -R ${RUN_USER} /etc/letsencrypt/live /etc/letsencrypt/archive
+    chmod -R g+rX /etc/letsencrypt/live /etc/letsencrypt/archive
+fi
+# reload 优先：热加载证书，**不断开在途连接**。它不可用时才退回 restart
+systemctl reload dbk-node 2>/dev/null || systemctl restart dbk-node
+HOOK
+        chmod +x "${hook_file}"
+        info "已安装证书续期钩子：${hook_file}"
     fi
 fi
 
@@ -591,9 +630,13 @@ fi
 if [[ -n "${TLS_CERT}" && "${TLS_CERT}" == /etc/letsencrypt/* ]]; then
     cat <<EOF
 
-${cyan}证书续期后执行 systemctl reload dbk-node 即可${plain}——它会重读证书文件，
-在途连接不断。可以挂进 certbot 的 deploy-hook：
-  echo 'systemctl reload dbk-node' > /etc/letsencrypt/renewal-hooks/deploy/dbk-node.sh
-  chmod +x /etc/letsencrypt/renewal-hooks/deploy/dbk-node.sh
+${cyan}证书续期已自动接管${plain}——钩子在
+  /etc/letsencrypt/renewal-hooks/deploy/10-dbk-node.sh
+
+它在每次续期成功后**先重设私钥 ACL、再 reload 节点**。两步缺一不可：
+续期会新建 privkey（root:root 0600），只 reload 的话节点读不到新私钥，
+表现为「跑了两个月突然起不来」。
+
+演练（不会真的续期）：certbot renew --dry-run
 EOF
 fi

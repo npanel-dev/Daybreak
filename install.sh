@@ -377,10 +377,70 @@ fi
 if [[ -n "${TLS_CERT}" ]]; then
     [[ -f "${TLS_CERT}" ]] || fail "证书不存在：${TLS_CERT}"
     [[ -n "${TLS_KEY}" && -f "${TLS_KEY}" ]] || fail "私钥不存在：${TLS_KEY}"
-    # 节点以 daybreak 用户运行，要读得到 letsencrypt 目录。
+    # 节点以 ${RUN_USER} 运行，要读得到证书**和私钥**。
+    #
+    # ## 只放开目录是不够的
+    #
+    # certbot 签出来的 `archive/<域名>/privkey*.pem` 是 `root:root 0600`，
+    # `live/` 下只是指向它的软链。**目录可进入 ≠ 文件可读** —— 早先这里
+    # 只 chmod/setfacl 了两个目录，于是节点起不来，systemd 只报
+    # 「control process exited with error code」，看不出是权限。
+    #
+    # ## setfacl 可能压根不存在
+    #
+    # Debian 13 默认不装 `acl`。原来两条命令都带 `2>/dev/null || true`，
+    # 缺了就**静默跳过**，什么提示都没有 —— 实测正是这个组合让机器装完
+    # 起不来：证书签发成功、配置校验通过，唯独服务起不来。
+    #
+    # 所以：先尝试装 acl；装不上就退回 chgrp + 0640（把私钥归到运行用户
+    # 所属组）。两条路都失败才报错 —— **不能再静默**。
     if [[ "${TLS_CERT}" == /etc/letsencrypt/* ]]; then
         chmod 0755 /etc/letsencrypt/live /etc/letsencrypt/archive 2>/dev/null || true
-        setfacl -m "u:${RUN_USER}:rx" /etc/letsencrypt/live /etc/letsencrypt/archive 2>/dev/null || true
+
+        if ! command -v setfacl >/dev/null 2>&1; then
+            info "安装 acl（要把私钥读权限授给 ${RUN_USER}）"
+            if command -v apt-get >/dev/null 2>&1; then
+                DEBIAN_FRONTEND=noninteractive apt-get install -y -qq acl >/dev/null 2>&1 || true
+            elif command -v dnf >/dev/null 2>&1; then
+                dnf install -y -q acl >/dev/null 2>&1 || true
+            fi
+        fi
+
+        if command -v setfacl >/dev/null 2>&1; then
+            # -R 且用 X（大写）：目录给 x、普通文件不给执行位
+            setfacl -R -m "u:${RUN_USER}:rX" \
+                /etc/letsencrypt/live /etc/letsencrypt/archive 2>/dev/null || true
+        else
+            # 没有 acl 时的退路：把私钥所在目录与文件归到运行用户的组
+            warn "没有 setfacl，改用 chgrp+0640 授权私钥"
+            chgrp -R "${RUN_USER}" /etc/letsencrypt/live /etc/letsencrypt/archive 2>/dev/null || true
+            chmod -R g+rX /etc/letsencrypt/live /etc/letsencrypt/archive 2>/dev/null || true
+        fi
+
+        # **授权完必须验证**：上面每一步都可能悄悄失败，而失败的表现是
+        # 服务起不来、日志里却只有一句语焉不详的 control process 错误。
+        #
+        # 用 runuser 而不是 sudo：前者属 util-linux，各发行版都有；
+        # **sudo 在最小安装里经常没有**，拿它做判据会把「工具缺失」误判成
+        # 「读不到私钥」，于是好端端的机器被拦下 —— 那比原来的静默更糟。
+        # 两个都没有就跳过验证并留痕：验不了不等于有问题，不能误杀。
+        if command -v runuser >/dev/null 2>&1; then
+            key_readable() { runuser -u "$1" -- test -r "$2" 2>/dev/null; }
+        elif command -v sudo >/dev/null 2>&1; then
+            key_readable() { sudo -u "$1" test -r "$2" 2>/dev/null; }
+        else
+            key_readable() { return 0; }
+            warn "没有 runuser/sudo，跳过私钥可读性验证"
+        fi
+
+        if ! key_readable "${RUN_USER}" "${TLS_KEY}"; then
+            fail "${RUN_USER} 读不到私钥：${TLS_KEY}
+节点以该用户运行，读不到私钥就起不来（systemd 只会报一句
+control process exited with error code，看不出是权限）。手动授权后重跑：
+  apt-get install -y acl
+  setfacl -R -m u:${RUN_USER}:rX /etc/letsencrypt/live /etc/letsencrypt/archive"
+        fi
+        info "已授权 ${RUN_USER} 读取证书与私钥"
     fi
 fi
 

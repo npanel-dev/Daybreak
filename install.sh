@@ -2,10 +2,12 @@
 #
 # Daybreak SimnetV2 Node —— 一键安装
 #
-#   # 首次安装
-#   wget -N https://raw.githubusercontent.com/npanel-dev/Daybreak/main/install.sh \
+#   # 首次安装（全新机器：先刷新 apt 并确保有 wget，再下载运行）
+#   apt update && apt install -y wget \
+#     && wget -N https://raw.githubusercontent.com/npanel-dev/Daybreak/main/install.sh \
 #     && bash install.sh --api-host https://panel.example.com \
-#                        --server-id 1 --secret-key <密钥>
+#                        --server-id 1 --secret-key <密钥> \
+#                        --acme-email 你的真实邮箱@域名   # 自动签证书时必填，**不能用 example.com**
 #
 #   # 之后再跑一次就是升级：自动取 Releases 里的最新版并重启，配置原样保留
 #   bash install.sh
@@ -144,6 +146,19 @@ fi
 [[ "${SERVER_ID}" =~ ^[0-9]+$ ]] || [[ -z "${SERVER_ID}" ]] \
     || fail "--server-id 必须是数字：${SERVER_ID}"
 
+# **ACME 邮箱先在本地挡一道。** Let's Encrypt 明确拒绝 example.com/.org/.net 这类
+# 保留域名，报的是 `contact email has forbidden domain`——注册账户阶段就 400，
+# 根本到不了 DNS/80 端口那一步。不先挡的话，certbot 失败后只会看到下面通用的
+# 「确认 DNS/80 端口」提示，把人往错误方向带（照占位邮箱直接跑就会踩这个坑）。
+if [[ -n "${ACME_EMAIL}" ]]; then
+    case "${ACME_EMAIL}" in
+        *@example.com|*@example.org|*@example.net)
+            fail "--acme-email 用了保留示例域名（${ACME_EMAIL}）——Let's Encrypt 会直接拒绝（forbidden domain）。请换成你的真实邮箱，如 name@yourdomain.com。" ;;
+        *@*.*) ;;  # 粗校验：含 @ 且域名带点
+        *) fail "--acme-email 格式不对：${ACME_EMAIL}（应形如 name@domain.com）" ;;
+    esac
+fi
+
 if [[ -n "${SECRET_KEY}" && -z "${SECRET_KEY_FILE}" ]]; then
     warn "密钥出现在命令行上：它会进 shell 历史，也能被同机的 ps 看到。"
     warn "批量部署建议改用 --secret-key-file。"
@@ -184,6 +199,13 @@ install_dependencies() {
 step "环境检查"
 if [[ "${SKIP_SERVICE}" != "true" ]] && ! command -v systemctl >/dev/null 2>&1; then
     fail "未找到 systemctl；本脚本只支持 systemd（只装文件用 --skip-service）"
+fi
+# **先刷新一次 apt 索引。** 全新机器的包索引可能过期或为空，导致后面装
+# ca-certificates / certbot 时报 404 或装不上。放在最前面刷一次，后续所有 apt
+# install（依赖、以及证书阶段的 certbot）都受益，不必各自再刷。
+if command -v apt-get >/dev/null 2>&1; then
+    info "刷新 apt 索引（apt-get update）"
+    apt-get update -qq >/dev/null 2>&1 || warn "apt update 失败，后续依赖/certbot 安装可能受影响"
 fi
 install_dependencies
 
@@ -365,9 +387,16 @@ if [[ "${PROFILE_SECURITY}" == "tls" && -z "${TLS_CERT}" ]]; then
         command -v certbot >/dev/null 2>&1 || fail "certbot 装不上，请手动签发后用 --tls-cert/--tls-key 重跑"
         # HTTP-01 需要 80 端口空闲，且 ${domain} 的 A 记录要指到本机。
         info "为 ${domain} 签发证书（HTTP-01，需要 80 端口空闲）"
-        certbot certonly --standalone --non-interactive --agree-tos \
-            -m "${ACME_EMAIL}" -d "${domain}" \
-            || fail "签发失败：确认 ${domain} 的 DNS 指向本机、且 80 端口没被占用"
+        # 捕获 certbot 输出：失败时把它的**真实错误**打出来，而不是永远只说「DNS/80」。
+        # 之前吞掉真实错误，害人照着「DNS/端口」白查半天——真凶常常是别的（如邮箱无效）。
+        certbot_log=""
+        if ! certbot_log="$(certbot certonly --standalone --non-interactive --agree-tos \
+                -m "${ACME_EMAIL}" -d "${domain}" 2>&1)"; then
+            printf '%s\n' "${certbot_log}" \
+                | grep -iE "detail|forbidden|invalid|problem|error|challenge|unauthorized|timeout|refused" \
+                | head -6 >&2 || true
+            fail "签发失败（上面几行是 certbot 的真实错误）。常见原因：邮箱无效（不能用 example.com）／${domain} 的 DNS 未指向本机／80 端口被占。完整日志见 /var/log/letsencrypt/letsencrypt.log"
+        fi
         TLS_CERT="${guess_cert}"; TLS_KEY="${guess_key}"
     else
         fail "面板给的是 TLS 模式，但本机没有 ${domain} 的证书。

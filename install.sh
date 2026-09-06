@@ -196,6 +196,57 @@ install_dependencies() {
     fi
 }
 
+# 网络内核调优：BBR + fq + TCP 缓冲上限。
+#
+# 跨区隧道的**下行是「节点→客户端」，发送方是本节点**，吞吐由**节点的拥塞控制**
+# 决定。默认 cubic 在有 bufferbloat / 轻微丢包的「长肥管道」（高带宽 × 高 RTT）上
+# 「一丢包就腰斩、恢复又慢」——实测表现为**单连接能爆发到上百 Mbps 却持续跑不满**。
+# BBR 是模型驱动、不把丢包当拥塞信号，能把管子持续填满，是跨区代理提速最省事、
+# 收益最大的一招；配 fq qdisc 效果最佳。顺带把 TCP 收发缓冲上限调大，让高 RTT 下
+# 窗口能开够（BDP = 带宽 × RTT，如 1Gbps × 75ms ≈ 9 MB）。
+#
+# 全部 **best-effort**：老内核缺 tcp_bbr 模块时只告警、不中断安装（回落系统默认）。
+tune_network() {
+    step "网络内核调优（BBR + fq + TCP 缓冲）"
+
+    # 加载 BBR 模块并设为开机自载（容器 / 精简镜像可能默认没加载）。
+    modprobe tcp_bbr 2>/dev/null || true
+    [[ -d /etc/modules-load.d ]] && \
+        printf 'tcp_bbr\n' > /etc/modules-load.d/daybreak-bbr.conf 2>/dev/null || true
+
+    # 独立 sysctl 片段：幂等（每次覆盖同一文件，不往 sysctl.conf 追加重复行）。
+    local conf=/etc/sysctl.d/99-daybreak-node.conf
+    if ! cat > "${conf}" <<'SYSCTL'
+# Daybreak 节点网络调优（由 install.sh 下发，可直接删除本文件还原系统默认）
+# BBR + fq：跨区隧道发送侧拥塞控制，长肥管道下持续填满而非一丢包就腰斩
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+# TCP 收发缓冲上限调大：高 RTT 下窗口能开够（BDP = 带宽 × RTT）
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.ipv4.tcp_rmem = 4096 87380 16777216
+net.ipv4.tcp_wmem = 4096 65536 16777216
+# 隧道常见 PMTU 黑洞：开 MTU 探测，避免大包被静默丢弃导致卡顿
+net.ipv4.tcp_mtu_probing = 1
+SYSCTL
+    then
+        warn "写 ${conf} 失败，跳过网络调优（不影响安装）"
+        return 0
+    fi
+
+    # 应用。`--system` 加载 /etc/sysctl.d/*；失败不致命。
+    sysctl --system >/dev/null 2>&1 || sysctl -p "${conf}" >/dev/null 2>&1 || true
+
+    # 校验 BBR 是否真的生效（老内核 / 无模块时不会）。
+    local cc
+    cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo unknown)"
+    if [[ "${cc}" == "bbr" ]]; then
+        info "拥塞控制：bbr（qdisc fq，TCP 缓冲上限 16 MiB，已持久化到 ${conf}）"
+    else
+        warn "BBR 未生效（当前：${cc}）——内核可能缺 tcp_bbr 模块；已回落系统默认，不影响运行"
+    fi
+}
+
 step "环境检查"
 if [[ "${SKIP_SERVICE}" != "true" ]] && ! command -v systemctl >/dev/null 2>&1; then
     fail "未找到 systemctl；本脚本只支持 systemd（只装文件用 --skip-service）"
@@ -208,6 +259,11 @@ if command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq >/dev/null 2>&1 || warn "apt update 失败，后续依赖/certbot 安装可能受影响"
 fi
 install_dependencies
+
+# 网络调优是系统级、面向运行中的节点；--skip-service（只装文件）时不动系统。
+if [[ "${SKIP_SERVICE}" != "true" ]]; then
+    tune_network
+fi
 
 case "$(uname -m)" in
     x86_64|amd64)  ARCH_TRIPLE="x86_64-unknown-linux-gnu" ;;

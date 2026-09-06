@@ -49,6 +49,14 @@ step "移除文件"
 rm -f "${BIN_DIR}/dbk-node"
 info "已删除 ${BIN_DIR}/dbk-node"
 
+# install.sh 下发的网络内核调优（BBR + fq + TCP 缓冲）：还原系统默认。
+# 只删我们自己的片段，不动系统其它 sysctl 配置。
+if [[ -f /etc/sysctl.d/99-daybreak-node.conf ]]; then
+    rm -f /etc/sysctl.d/99-daybreak-node.conf /etc/modules-load.d/daybreak-bbr.conf
+    sysctl --system >/dev/null 2>&1 || true
+    info "已移除网络调优片段（BBR/fq/缓冲将在重载或重启后回落系统默认）"
+fi
+
 if [[ "${PURGE}" == "true" ]]; then
     step "清除配置与数据（--purge）"
     # 有未上报的流量就说一声再删——那是钱。

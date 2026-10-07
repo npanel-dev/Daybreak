@@ -228,6 +228,13 @@ net.ipv4.tcp_rmem = 4096 87380 16777216
 net.ipv4.tcp_wmem = 4096 65536 16777216
 # 隧道常见 PMTU 黑洞：开 MTU 探测，避免大包被静默丢弃导致卡顿
 net.ipv4.tcp_mtu_probing = 1
+# 探测的起点与下限都压到 1360：三台现场节点（AU/HK/SG，2026-10-07）手工验证，
+# 默认 1024/512 起探会先经历一轮小包低效期；1360 覆盖绝大多数隧道/PPPoE 路径
+net.ipv4.tcp_base_mss = 1360
+net.ipv4.tcp_mtu_probe_floor = 1360
+# 内核未发送队列上限：dbk-node ≥ v1.0.25 已按 socket 对载体设置同值（P3018），
+# 这里的全局值顺带覆盖出站目标 socket；控制帧不再排在内核里的大段数据后面
+net.ipv4.tcp_notsent_lowat = 131072
 SYSCTL
     then
         warn "写 ${conf} 失败，跳过网络调优（不影响安装）"
@@ -241,7 +248,7 @@ SYSCTL
     local cc
     cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo unknown)"
     if [[ "${cc}" == "bbr" ]]; then
-        info "拥塞控制：bbr（qdisc fq，TCP 缓冲上限 16 MiB，已持久化到 ${conf}）"
+        info "拥塞控制：bbr（qdisc fq，TCP 缓冲上限 16 MiB，MSS 探测下限 1360，notsent_lowat 128 KiB，已持久化到 ${conf}）"
     else
         warn "BBR 未生效（当前：${cc}）——内核可能缺 tcp_bbr 模块；已回落系统默认，不影响运行"
     fi

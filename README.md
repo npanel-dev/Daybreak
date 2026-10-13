@@ -32,6 +32,18 @@ bash install.sh
 自动取 Releases 里的最新版、替换二进制、重启服务。**配置原样保留**，
 输出会告诉你从哪个版本换到了哪个版本。
 
+### v1.0.29 起：SimNet TCP 须配套升级
+
+v1.0.29 的 Node 内部版本为 0.4.28，SimNet 每条 TCP 独立建物理载体并认证 bit3；
+UDP 按入口关联复用。新 Node 不接受旧共享 TCP mux，且不提供 shared 回退；
+新 SDK 连接不支持 bit3 的旧 Node 会在业务 Open 前失败。
+
+请将 Node 与嵌入 SDK 0.4.28 的客户端配套切换后再执行默认升级。本批重编
+Android/macOS SDK；其余平台的旧 SDK 不能标为支持本模型。普通 VLESS 的协议
+路径未因此改变。旧发布中的“新旧任意组合互通”不适用于本版 SimNet TCP。
+本次发布与本机验证不等于已经部署或完成客户设备验收，详见
+[v1.0.29 发布说明](https://github.com/npanel-dev/Daybreak/releases/tag/v1.0.29)。
+
 ## 卸载
 
 ```bash

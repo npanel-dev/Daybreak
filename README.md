@@ -48,6 +48,10 @@ v1.0.30 只降低 Node 独立 TCP 中继的 CPU 占用，wire、配置与配套�
 从 v1.0.29 升级无需更换客户端，详见
 [v1.0.30 发布说明](https://github.com/npanel-dev/Daybreak/releases/tag/v1.0.30)。
 
+v1.0.31 修复多用户同时建连时监听自锁（最长 30 秒连不上），wire、配置与配套要求同
+v1.0.29；v1.0.29 / v1.0.30 的节点建议尽快升级，无需更换客户端，详见
+[v1.0.31 发布说明](https://github.com/npanel-dev/Daybreak/releases/tag/v1.0.31)。
+
 ## 卸载
 
 ```bash

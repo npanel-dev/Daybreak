@@ -44,6 +44,10 @@ Android/macOS SDK；其余平台的旧 SDK 不能标为支持本模型。普通 
 本次发布与本机验证不等于已经部署或完成客户设备验收，详见
 [v1.0.29 发布说明](https://github.com/npanel-dev/Daybreak/releases/tag/v1.0.29)。
 
+v1.0.30 只降低 Node 独立 TCP 中继的 CPU 占用，wire、配置与配套要求同 v1.0.29；
+从 v1.0.29 升级无需更换客户端，详见
+[v1.0.30 发布说明](https://github.com/npanel-dev/Daybreak/releases/tag/v1.0.30)。
+
 ## 卸载
 
 ```bash

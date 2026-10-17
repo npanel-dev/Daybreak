@@ -52,6 +52,14 @@ v1.0.31 修复多用户同时建连时监听自锁（最长 30 秒连不上）�
 v1.0.29；v1.0.29 / v1.0.30 的节点建议尽快升级，无需更换客户端，详见
 [v1.0.31 发布说明](https://github.com/npanel-dev/Daybreak/releases/tag/v1.0.31)。
 
+## Mihomo SDK（客户端，与 Node 分开发布）
+
+基于 mihomo 内核的客户端 SDK（Android / iOS / macOS / Windows，Flutter 集成）在 [`mihomo-sdk/`](mihomo-sdk/README.md) 目录下单独维护：
+
+- 标签为 `mihomo-sdk-vX.Y.Z`，资产以 `mihomo-sdk-` 开头，**不会标为 Latest**，不影响上面的 `install.sh`；
+- 它不是 Rust 的 `dbk-sdk`；
+- 要求 Node v1.0.29+，建议 v1.0.31。
+
 ## 卸载
 
 ```bash

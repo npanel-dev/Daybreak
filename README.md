@@ -52,6 +52,11 @@ v1.0.31 修复多用户同时建连时监听自锁（最长 30 秒连不上）�
 v1.0.29；v1.0.29 / v1.0.30 的节点建议尽快升级，无需更换客户端，详见
 [v1.0.31 发布说明](https://github.com/npanel-dev/Daybreak/releases/tag/v1.0.31)。
 
+v1.0.32（内部版本 0.4.30）支持面板对订阅 URL 凭据的「不限目标」标记：带标记的凭据跳过
+目标白名单、放行 UDP，供软路由按网段使用隧道；App 的会话凭据不受影响。面板按节点上报的
+版本门控该字段，**节点须先于面板升级**。wire 与配置不变，无需更换客户端，详见
+[v1.0.32 发布说明](https://github.com/npanel-dev/Daybreak/releases/tag/v1.0.32)。
+
 ## Mihomo SDK（客户端，与 Node 分开发布）
 
 基于 mihomo 内核的客户端 SDK（Android / iOS / macOS / Windows，Flutter 集成）在 [`mihomo-sdk/`](mihomo-sdk/README.md) 目录下单独维护：
